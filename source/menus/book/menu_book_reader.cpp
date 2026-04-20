@@ -343,8 +343,14 @@ void Menu_OpenBook(char *path, int scroll_speed, float zoom_amount)
             reader->permStatusBar = !reader->permStatusBar;
         }
 
-        // Y: open notes overlay
+        // Y: cycle page layout (portrait / landscape / vertical / spread)
         if (!helpMenu && !notesMenu && kDown & HidNpadButton_Y)
+        {
+            reader->switch_page_layout();
+        }
+
+        // L: open notes overlay
+        if (!helpMenu && !notesMenu && kDown & HidNpadButton_L)
         {
             notesMenu = true;
         }

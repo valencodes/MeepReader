@@ -9,12 +9,6 @@ Fork of eBookReaderSwitch with major improvements to performance, format support
 - **Format support:** PDF, EPUB, XPS, CBZ, CBR, CBT, CB7
 - **Reading modes:** Portrait, Landscape, Vertical (fit-to-width), Spread (two-page)
 - **Cover grid browser** with folder navigation and thumbnail previews
-- **Async prefetch** — next/previous pages pre-rendered for instant page turns
-- **Raw image LRU cache** — revisited pages load instantly
-- **Early first-page display** — cover shown in ~0.5s while large archives enumerate in background
-- **Page-name disk cache** — second+ open of any comic skips enumeration entirely
-- **RAR3 fast enumeration** — header-only scan (~50ms for 500MB solid RAR)
-- **Progressive navigation** — flip through pages while archive is still scanning
 - **Analog stick scrolling** — full 360° proportional panning with left stick
 - **Pinch-to-zoom** and right-stick zoom
 - **Dark and light mode**
@@ -33,6 +27,7 @@ Fork of eBookReaderSwitch with major improvements to performance, format support
 |---|---|---|
 | D-Pad Left/Right | Prev / Next page | Prev / Next page |
 | D-Pad Up/Down | Zoom max / Zoom out | Prev / Next page |
+| L | Open notes for current comics | Open notes |
 | ZL / ZR | Prev / Next page | Zoom out / Zoom in |
 | R+ZR / L+ZL | Skip 9 pages forward/back | Skip 9 pages forward/back |
 | Left Stick | Analog scroll (360°) | Analog scroll (360°) |
