@@ -73,6 +73,39 @@ static void chooser_note_save(const string& fpath, const string& text) {
   fclose(f);
 }
 
+// ── Reading history ───────────────────────────────────────────────────────────
+static const char RECENT_FILE[]     = "/switch/WookReader/.recent.lst";
+static const char RECENT_SENTINEL[] = "/WOOK_RECENT";
+static vector<string> g_recent;
+
+static void load_recent() {
+    g_recent.clear();
+    FILE* f = fopen(RECENT_FILE, "r");
+    if (!f) return;
+    char line[512];
+    while ((int)g_recent.size() < 10 && fgets(line, sizeof(line), f)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) len--;
+        if (len > 0) g_recent.push_back(string(line, len));
+    }
+    fclose(f);
+}
+
+static void save_recent() {
+    FILE* f = fopen(RECENT_FILE, "w");
+    if (!f) return;
+    for (const auto& p : g_recent) fprintf(f, "%s\n", p.c_str());
+    fclose(f);
+}
+
+static void update_recent(const string& fpath) {
+    if (!g_recent.empty() && g_recent[0] == fpath) return;  // already at top
+    g_recent.erase(remove(g_recent.begin(), g_recent.end(), fpath), g_recent.end());
+    g_recent.insert(g_recent.begin(), fpath);
+    if ((int)g_recent.size() > 10) g_recent.resize(10);
+    save_recent();
+}
+
 /*This is for the colors array, don't have a great way of calculating it so i
  * use this definition*/
 #define COLORS_SIZE 24
@@ -821,6 +854,7 @@ void Menu_StartChoosing() {
   vector<fs::path> sorted_entries;
   int amountOfFiles = 0;
   bool isWarningOnScreen = false;
+  bool inRecentFolder = false;
 
   // Notes overlay state
   bool drawNotesChooser = false;
@@ -888,6 +922,13 @@ void Menu_StartChoosing() {
     chosen_index = 0;
 
     sorted_entries = get_sorted_entries(dir, allowedExtentions, &numFolders);
+
+    // Inject virtual "Recently Opened" folder at root when history exists
+    if (dir == "/switch/WookReader" && !g_recent.empty()) {
+      sorted_entries.insert(sorted_entries.begin(), fs::path(RECENT_SENTINEL));
+      numFolders++;
+    }
+
     amountOfFiles  = (int)sorted_entries.size();
 
     int numBooks = amountOfFiles - numFolders;
@@ -895,6 +936,28 @@ void Menu_StartChoosing() {
     cover_load_index = 0;
   };
 
+  // Populate grid from g_recent (no filesystem scan).
+  auto enter_recent = [&]() {
+    for (int w = 0; w < N_WORKERS; w++) {
+      __atomic_store_n(&cl[w].job_ready, 0, __ATOMIC_RELEASE);
+      if (cl_in_flight[w] >= 0) {
+        __atomic_store_n(&cl[w].stale, 1, __ATOMIC_RELEASE);
+        cl_in_flight[w] = -1;
+      }
+    }
+    inRecentFolder = true;
+    cover_textures.clear();
+    trunc_cache.clear();
+    scroll_y = 0; chosen_index = 0;
+    numFolders = 0;
+    sorted_entries.clear();
+    for (const auto& p : g_recent) sorted_entries.push_back(fs::path(p));
+    amountOfFiles = (int)sorted_entries.size();
+    cover_textures.resize(amountOfFiles, nullptr);
+    cover_load_index = 0;
+  };
+
+  load_recent();
   enter_directory(path);
 
   padConfigureInput(1, HidNpadStyleSet_NpadStandard);
@@ -945,6 +1008,9 @@ void Menu_StartChoosing() {
     if (kDown & HidNpadButton_B) {
       if (drawNotesChooser) {
         drawNotesChooser = false;
+      } else if (inRecentFolder) {
+        inRecentFolder = false;
+        enter_directory(path);
       } else if (isWarningOnScreen) {
         isWarningOnScreen = false;
       } else if (drawOption) {
@@ -969,29 +1035,38 @@ void Menu_StartChoosing() {
     if (kDown & HidNpadButton_A && !drawOption && !drawNotesChooser &&
         chosen_index < (int)sorted_entries.size()) {
       const fs::path& sel = sorted_entries[chosen_index];
-      string filename = sel.filename().string();
-      string extention;
-      if (filename.find('.') != string::npos)
-        extention = filename.substr(filename.find_last_of("."));
-      else {
-        std::error_code ec;
-        extention = fs::is_directory(sel, ec) ? "directory" : "none";
-      }
 
-      if (contains(warnedExtentions, extention)) {
-        if (isWarningOnScreen) {
-          isWarningOnScreen = false;
-          string book = sel.string();
-          Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
-        } else {
-          isWarningOnScreen = true;
-        }
-      } else if (extention == "directory") {
-        path = sel.string();
-        enter_directory(path);
+      if (sel.string() == RECENT_SENTINEL) {
+        enter_recent();
       } else {
-        string book = sel.string();
-        Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
+        string filename = sel.filename().string();
+        string extention;
+        if (filename.find('.') != string::npos)
+          extention = filename.substr(filename.find_last_of("."));
+        else {
+          std::error_code ec;
+          extention = fs::is_directory(sel, ec) ? "directory" : "none";
+        }
+
+        if (contains(warnedExtentions, extention)) {
+          if (isWarningOnScreen) {
+            isWarningOnScreen = false;
+            string book = sel.string();
+            update_recent(book);
+            Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
+            if (inRecentFolder) enter_recent();
+          } else {
+            isWarningOnScreen = true;
+          }
+        } else if (extention == "directory") {
+          path = sel.string();
+          enter_directory(path);
+        } else {
+          string book = sel.string();
+          update_recent(book);
+          Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
+          if (inRecentFolder) enter_recent();
+        }
       }
     }
 
@@ -1247,14 +1322,18 @@ void Menu_StartChoosing() {
                 extention = fs::is_directory(sel, ec) ? "directory" : "none";
               }
 
-              if (contains(warnedExtentions, extention))
+              if (sel.string() == RECENT_SENTINEL) {
+                enter_recent();
+              } else if (contains(warnedExtentions, extention)) {
                 isWarningOnScreen = true;
-              else if (extention == "directory") {
+              } else if (extention == "directory") {
                 path = sel.string();
                 enter_directory(path);
               } else {
                 string book = sel.string();
+                update_recent(book);
                 Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
+                if (inRecentFolder) enter_recent();
               }
             }
           }
@@ -1358,8 +1437,14 @@ void Menu_StartChoosing() {
         SDL_DrawRect(RENDERER, 0, row_y, windowX, FOLDER_H, selectorColor);
 
       SDL_DrawImageScale(RENDERER, folder_image, 8, row_y + 4, 32, 32);
-      SDL_DrawText(RENDERER, ROBOTO_25, 48, row_y + (FOLDER_H - 22) / 2,
-                   textColor, sorted_entries[i].filename().c_str());
+      if (sorted_entries[i].string() == RECENT_SENTINEL) {
+        SDL_Color recentColor = {0, 180, 220, 255};
+        SDL_DrawText(RENDERER, ROBOTO_25, 48, row_y + (FOLDER_H - 22) / 2,
+                     recentColor, "Recently Opened");
+      } else {
+        SDL_DrawText(RENDERER, ROBOTO_25, 48, row_y + (FOLDER_H - 22) / 2,
+                     textColor, sorted_entries[i].filename().c_str());
+      }
     }
 
     // ── Book / comic grid ─────────────────────────────────────────────────────
