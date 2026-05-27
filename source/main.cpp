@@ -108,6 +108,8 @@ SDL_Window* WINDOW;
 SDL_Event EVENT;
 TTF_Font *ROBOTO_35, *ROBOTO_30, *ROBOTO_27, *ROBOTO_25, *ROBOTO_20, *ROBOTO_15;
 bool configDarkMode;
+bool configScreenButtons = false;
+bool configStatusBar = true;
 
 void Term_Services() {
   Log_Write("Terminate Services");

@@ -94,6 +94,20 @@ static void save_last_page(const char* book_name, int current_page) {
   }
 }
 
+// Precondition: config is already initialized (always called after load_last_page).
+static void save_total_pages(const char* book_name, int total) {
+  std::string key = std::string(book_name) + "_T";
+  config_setting_t* setting =
+      config_setting_get_member(config_root_setting(config), key.c_str());
+  if (!setting)
+    setting = config_setting_add(config_root_setting(config), key.c_str(),
+                                 CONFIG_TYPE_INT);
+  if (setting) {
+    config_setting_set_int(setting, total);
+    config_write_file(config, configFile);
+  }
+}
+
 // Returns true if the path is a comic archive (CBZ/CBR/CBT/CB7,
 // case-insensitive)
 static bool path_is_cbz(const char* path) {
@@ -178,6 +192,9 @@ BookReader::BookReader(const char* path, int* result) {
     Log_Write("BookReader: MuPDF opened OK, starting page=" +
               std::to_string(current_page));
     if (current_page > 0) show_status_bar();
+    _total_pages = fz_count_pages(ctx, doc);
+    if (_total_pages > 0)
+      save_total_pages(book_name.c_str(), _total_pages);
   }
   fz_catch(ctx) {
     Log_Error(std::string("BookReader: fz_catch on open: ") + path);
@@ -187,6 +204,11 @@ BookReader::BookReader(const char* path, int* result) {
 }
 
 BookReader::~BookReader() {
+  if (_nav_tex_left)  { SDL_DestroyTexture(_nav_tex_left);  _nav_tex_left  = nullptr; }
+  if (_nav_tex_right) { SDL_DestroyTexture(_nav_tex_right); _nav_tex_right = nullptr; }
+  if (_nav_tex_up)    { SDL_DestroyTexture(_nav_tex_up);    _nav_tex_up    = nullptr; }
+  if (_nav_tex_down)  { SDL_DestroyTexture(_nav_tex_down);  _nav_tex_down  = nullptr; }
+
   if (doc) {
     fz_drop_document(ctx, doc);
     doc = nullptr;
@@ -208,21 +230,21 @@ void BookReader::previous_page(int n) {
   if (!layout) return;
   layout->previous_page(n);
   show_status_bar();
-  save_last_page(book_name.c_str(), layout->current_page());
+  save_progress();
 }
 
 void BookReader::next_page(int n) {
   if (!layout) return;
   layout->next_page(n);
   show_status_bar();
-  save_last_page(book_name.c_str(), layout->current_page());
+  save_progress();
 }
 
 void BookReader::goto_page(int page_1indexed) {
   if (!layout) return;
   layout->goto_page(page_1indexed - 1);  // convert 1-indexed → 0-indexed
   show_status_bar();
-  save_last_page(book_name.c_str(), layout->current_page());
+  save_progress();
 }
 
 void BookReader::set_notes(const std::string &text) {
@@ -252,22 +274,22 @@ void BookReader::zoom_at_point(float delta, float px, float py) {
 }
 
 void BookReader::move_page_up(int scroll_speed) {
-  if (!layout) return;
+  if (!layout || layout->pageFitsHeight()) return;
   layout->move_up(scroll_speed);
 }
 
 void BookReader::move_page_down(int scroll_speed) {
-  if (!layout) return;
+  if (!layout || layout->pageFitsHeight()) return;
   layout->move_down(scroll_speed);
 }
 
 void BookReader::move_page_left(int scroll_speed) {
-  if (!layout) return;
+  if (!layout || layout->pageFitsWidth()) return;
   layout->move_left(scroll_speed);
 }
 
 void BookReader::move_page_right(int scroll_speed) {
-  if (!layout) return;
+  if (!layout || layout->pageFitsWidth()) return;
   layout->move_right(scroll_speed);
 }
 
@@ -286,6 +308,7 @@ void BookReader::switch_page_layout() {
   // CBZ: Y button toggles single-page / two-page spread
   if (_is_cbz) {
     if (layout) static_cast<CBZPageLayout*>(layout)->toggle_spread();
+    _nav_landscape = !_nav_landscape;
     return;
   }
 
@@ -360,6 +383,13 @@ void BookReader::draw(bool drawHelp, bool drawNotes) {
         SDL_RenderPresent(RENDERER);
         return;
       }
+      // Persist total page count once — CBZ enum was async so constructor
+      // couldn't do it. Guard on _total_pages == 0 ensures single write.
+      if (_total_pages == 0) {
+        _total_pages = cbz->page_count();
+        if (_total_pages > 0)
+          save_total_pages(book_name.c_str(), _total_pages);
+      }
     }
   }
 
@@ -400,7 +430,7 @@ void BookReader::draw(bool drawHelp, bool drawNotes) {
     SDL_DrawButtonPrompt(RENDERER, left_stick_up_down, ROBOTO_25, textColor,
                          "Page up/down.", textX, textY + 38 * 3, 35, 35, 5, 0);
     SDL_DrawButtonPrompt(RENDERER, button_y, ROBOTO_25, textColor,
-                         "Open notes.", textX, textY + 38 * 4, 35, 35, 5, 0);
+                         "Change page layout.", textX, textY + 38 * 4, 35, 35, 5, 0);
     SDL_DrawButtonPrompt(RENDERER, button_x, ROBOTO_25, textColor,
                          "Keep status bar on.", textX, textY + 38 * 5, 35, 35,
                          5, 0);
@@ -450,27 +480,22 @@ void BookReader::draw(bool drawHelp, bool drawNotes) {
     }
   }
 
-  if (permStatusBar || --status_bar_visible_counter > 0) {
+  if (configStatusBar && (permStatusBar || --status_bar_visible_counter > 0)) {
     char* title = layout->info();
 
-    // Check if title and fonts are valid
     if (title && ROBOTO_15 && ROBOTO_25) {
       int title_width = 0, title_height = 0;
       TTF_SizeText(ROBOTO_15, title, &title_width, &title_height);
 
-      SDL_Color color = configDarkMode ? STATUS_BAR_DARK : STATUS_BAR_LIGHT;
-
       if (_currentPageLayout == BookPageLayoutPortrait ||
           _currentPageLayout == BookPageLayoutVertical) {
-        SDL_DrawRect(RENDERER, 0, 0, 1280, 45,
-                     SDL_MakeColour(color.r, color.g, color.b, 180));
+        SDL_DrawRect(RENDERER, 0, 0, 1280, 45, SDL_MakeColour(0, 0, 0, 180));
         SDL_DrawText(RENDERER, ROBOTO_25, (1280 - title_width) / 2,
                      (40 - title_height) / 2, WHITE, title);
 
         StatusBar_DisplayTime(false);
       } else if (_currentPageLayout == BookPageLayoutLandscape) {
-        SDL_DrawRect(RENDERER, 1280 - 45, 0, 45, 720,
-                     SDL_MakeColour(color.r, color.g, color.b, 180));
+        SDL_DrawRect(RENDERER, 1280 - 45, 0, 45, 720, SDL_MakeColour(0, 0, 0, 180));
         int x = (1280 - title_width) - ((40 - title_height) / 2);
         int y = (720 - title_height) / 2;
         SDL_DrawRotatedText(RENDERER, ROBOTO_25, (double)90, x, y, WHITE,
@@ -481,10 +506,69 @@ void BookReader::draw(bool drawHelp, bool drawNotes) {
     }
   }
 
+  if (configScreenButtons && !drawHelp && !drawNotes) {
+    uint32_t now = SDL_GetTicks();
+    if (now < _btn_hide_at) {
+      uint32_t ms_left = _btn_hide_at - now;
+      int alpha = (ms_left < 600u) ? (int)(ms_left * 200u / 600u) : 200;
+
+      auto make_nav = [&](const char* utf8) -> SDL_Texture* {
+        if (!ROBOTO_35) return nullptr;
+        SDL_Surface* s = TTF_RenderUTF8_Blended(
+            ROBOTO_35, utf8, SDL_MakeColour(255, 255, 255, 255));
+        if (!s) return nullptr;
+        SDL_Texture* t = SDL_CreateTextureFromSurface(RENDERER, s);
+        SDL_FreeSurface(s);
+        return t;
+      };
+      if (!_nav_tex_init) {
+        _nav_tex_left  = make_nav("\xe2\x80\xb9");
+        _nav_tex_right = make_nav("\xe2\x80\xba");
+        _nav_tex_up    = make_nav("\xe2\x86\x91");
+        _nav_tex_down  = make_nav("\xe2\x86\x93");
+        _nav_tex_init  = true;
+      }
+
+      const int BW = 80, BH = 80;
+      auto draw_btn = [&](int bx, int by, SDL_Texture* glyph, double angle = 0.0) {
+        SDL_SetRenderDrawBlendMode(RENDERER, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(RENDERER, 0, 0, 0, (Uint8)alpha);
+        SDL_Rect bg = {bx, by, BW, BH};
+        SDL_RenderFillRect(RENDERER, &bg);
+        if (glyph) {
+          SDL_SetTextureAlphaMod(glyph, (Uint8)alpha);
+          SDL_SetTextureBlendMode(glyph, SDL_BLENDMODE_BLEND);
+          int tw = 0, th = 0;
+          SDL_QueryTexture(glyph, NULL, NULL, &tw, &th);
+          SDL_Rect dst = {bx + (BW - tw) / 2, by + (BH - th) / 2, tw, th};
+          SDL_RenderCopyEx(RENDERER, glyph, NULL, &dst, angle, NULL, SDL_FLIP_NONE);
+        }
+        SDL_SetRenderDrawBlendMode(RENDERER, SDL_BLENDMODE_NONE);
+      };
+
+      if (!_nav_landscape) {
+        draw_btn(20,             (720 - BH) / 2, _nav_tex_left);
+        draw_btn(1280 - 20 - BW, (720 - BH) / 2, _nav_tex_right);
+      } else {
+        // Rotate ‹/› 90° so they point up/down — avoids font missing ↑/↓ glyphs
+        draw_btn((1280 - BW) / 2, 20,        _nav_tex_left,  90.0);
+        draw_btn((1280 - BW) / 2, 720-20-BH, _nav_tex_right, 90.0);
+      }
+    }
+  }
+
   SDL_RenderPresent(RENDERER);
 }
 
 void BookReader::show_status_bar() { status_bar_visible_counter = 200; }
+void BookReader::reset_nav_buttons() { _btn_hide_at = SDL_GetTicks() + 3000; }
+
+void BookReader::save_progress() {
+  if (!layout) return;
+  save_last_page(book_name.c_str(), layout->current_page());
+  // Total pages is invariant while a book is open; written once at open time.
+  // Removed from here to eliminate the double SD write per page navigation.
+}
 
 void BookReader::switch_current_page_layout(BookPageLayout bookPageLayout,
                                             int current_page) {
@@ -495,6 +579,7 @@ void BookReader::switch_current_page_layout(BookPageLayout bookPageLayout,
   }
 
   _currentPageLayout = bookPageLayout;
+  _nav_landscape     = (bookPageLayout != BookPageLayoutPortrait);
 
   // CBZ: use CBZPageLayout (no MuPDF doc involved, landscape not yet supported)
   if (_is_cbz) {

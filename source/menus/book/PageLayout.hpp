@@ -65,6 +65,8 @@ public:
     virtual void reset();
     virtual void draw_page();
     virtual char *info();
+    virtual bool pageFitsWidth() const  { return page_bounds.x1 * zoom <= viewport.w + 0.5f; }
+    virtual bool pageFitsHeight() const { return page_bounds.y1 * zoom <= viewport.h + 0.5f; }
 
 protected:
     virtual void render_page_to_texture(int num, bool reset_zoom);

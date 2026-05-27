@@ -1,4 +1,4 @@
-name: eBookReaderSwitch CI pipeline
+name: WookReader CI pipeline
 
 on: [push, pull_request, workflow_dispatch]
 
@@ -20,12 +20,12 @@ jobs:
         path: mupdf/build
         key: ${{ runner.os }}-mupdf-${{ hashFiles('**/mupdf/PKGBUILD') }}
         
-    - name: Building eBookReaderSwitch
+    - name: Building WookReader
       run: |
         export NODEBUG=true
         make mupdf && make -j$(nproc)
         
     - uses: actions/upload-artifact@master
       with:
-        name: eBookReaderSwitch
-        path: eBookReaderSwitch.nro
+        name: WookReader
+        path: WookReader.nro

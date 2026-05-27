@@ -66,6 +66,9 @@ void Menu_OpenBook(char *path, int scroll_speed, float zoom_amount)
         HidTouchScreenState state = {0};
         hidGetTouchScreenStates(&state, 1);
 
+        if (configScreenButtons && (kDown || (state.count == 1 && touch_prev_count == 0)))
+            reader->reset_nav_buttons();
+
         if (!helpMenu && !notesMenu)
         {
             if (state.count == 1)
@@ -128,25 +131,53 @@ void Menu_OpenBook(char *path, int scroll_speed, float zoom_amount)
                 touch_prev_x0 = cx0;  touch_prev_y0 = cy0;
                 touch_prev_x1 = cx1;  touch_prev_y1 = cy1;
             }
-            else if (state.count == 0 && touch_prev_count == 1 && !touch_dragging)
+            else if (state.count == 0 && touch_prev_count == 1)
             {
-                // Finger lifted without meaningful movement → tap: zone-based navigation
-                float             tx     = touch_start_x, ty = touch_start_y;
-                BookPageLayout    layout = reader->currentPageLayout();
+                BookPageLayout layout   = reader->currentPageLayout();
+                float dx_total = touch_prev_x0 - touch_start_x;
+                float dy_total = touch_prev_y0 - touch_start_y;
+                float adx = fabsf(dx_total), ady = fabsf(dy_total);
+                const float SWIPE_THRESH = 180.0f;
+                bool did_swipe = false;
 
-                if (tx > 1000 && ty > 200 && ty < 500)
+                bool nav_land = reader->navLandscape();
+
+                // Horizontal swipe → page nav when buttons are left/right
+                if (touch_dragging && adx > SWIPE_THRESH && adx > ady * 1.5f && !nav_land)
                 {
-                    if (layout == BookPageLayoutPortrait || layout == BookPageLayoutVertical)
-                        reader->next_page(1);
-                    else if (layout == BookPageLayoutLandscape)
-                        reader->zoom_in(zoom_amount);
+                    if (dx_total < 0) reader->next_page(1);
+                    else              reader->previous_page(1);
+                    reader->reset_nav_buttons();
+                    did_swipe = true;
                 }
-                else if (tx < 280 && ty > 200 && ty < 500)
+                // Vertical swipe → page nav when buttons are top/bottom
+                else if (touch_dragging && ady > SWIPE_THRESH && ady > adx * 1.5f && nav_land)
                 {
-                    if (layout == BookPageLayoutPortrait || layout == BookPageLayoutVertical)
-                        reader->previous_page(1);
-                    else if (layout == BookPageLayoutLandscape)
-                        reader->zoom_out(zoom_amount);
+                    if (dy_total < 0) reader->previous_page(1);
+                    else              reader->next_page(1);
+                    reader->reset_nav_buttons();
+                    did_swipe = true;
+                }
+
+                if (!did_swipe && !touch_dragging)
+                {
+                    // Finger lifted without drag → tap: zone-based navigation
+                    float tx = touch_start_x, ty = touch_start_y;
+
+                    if (!nav_land)
+                    {
+                        if (tx > 1000 && ty > 200 && ty < 500)
+                            reader->next_page(1);
+                        else if (tx < 280 && ty > 200 && ty < 500)
+                            reader->previous_page(1);
+                    }
+                    else
+                    {
+                        if (ty < 150)
+                            reader->previous_page(1);
+                        else if (ty > 570)
+                            reader->next_page(1);
+                    }
                 }
             }
         }

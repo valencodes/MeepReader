@@ -48,6 +48,15 @@ public:
     void zoom_at_point(float delta, float px, float py);
     void poll_prefetch();  // call once per frame to upload finished prefetch pixels to GPU
 
+    bool pageFitsWidth() const override {
+        float vw = ((_rotation == 90 && !_tex_r) ? (float)_tex_h : (float)_tex_w) * _zoom;
+        return vw <= _viewport.w + 0.5f;
+    }
+    bool pageFitsHeight() const override {
+        float vh = ((_rotation == 90 && !_tex_r) ? (float)_tex_w : (float)_tex_h) * _zoom;
+        return vh <= _viewport.h + 0.5f;
+    }
+
 private:
     // Load image at page index from the archive, build SDL_Texture, optionally reset zoom.
     void load_page_texture(int page_num, bool reset_zoom);

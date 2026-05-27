@@ -28,6 +28,8 @@ namespace fs = filesystem;
 extern void Log_Write(const std::string& msg);
 extern void Log_Error(const std::string& msg);
 extern fz_context *ctx;
+extern config_t*   config;
+extern const char* configFile;
 
 // ── Per-comic notes helpers ───────────────────────────────────────────────────
 static const char* CHOOSER_NOTES_DIR = "/switch/WookReader/.notes";
@@ -201,6 +203,14 @@ static int load_config(unsigned int* chosenFolderColor,
     *configDarkMode = config_setting_get_bool(dark);
   }
 
+  config_setting_t* scrbtn =
+      config_setting_get_member(config_root_setting(optionConfig), "ScreenButtons");
+  if (scrbtn) configScreenButtons = config_setting_get_bool(scrbtn);
+
+  config_setting_t* statbar =
+      config_setting_get_member(config_root_setting(optionConfig), "StatusBar");
+  if (statbar) configStatusBar = config_setting_get_bool(statbar);
+
   return 0;
 }
 
@@ -237,8 +247,24 @@ static void save_config(unsigned int chosenFolderColor,
     config_setting_set_int(scroll, scroll_speed);
     config_setting_set_int(zoom, zoom_amount);
     config_setting_set_bool(dark, configDarkMode);
-    config_write_file(optionConfig, optionFile);
   }
+  config_setting_t* scrbtn =
+      config_setting_get_member(config_root_setting(optionConfig), "ScreenButtons");
+  if (!scrbtn)
+    scrbtn = config_setting_add(config_root_setting(optionConfig), "ScreenButtons",
+                                CONFIG_TYPE_BOOL);
+  if (scrbtn)
+    config_setting_set_bool(scrbtn, configScreenButtons);
+
+  config_setting_t* statbar =
+      config_setting_get_member(config_root_setting(optionConfig), "StatusBar");
+  if (!statbar)
+    statbar = config_setting_add(config_root_setting(optionConfig), "StatusBar",
+                                 CONFIG_TYPE_BOOL);
+  if (statbar)
+    config_setting_set_bool(statbar, configStatusBar);
+
+  config_write_file(optionConfig, optionFile);
 }
 
 // Natural sort: compare strings so that embedded numbers sort numerically.
@@ -829,7 +855,7 @@ void Menu_StartChoosing() {
 
   bool drawOption  = false;
   int  option_index   = 0;
-  int  amountOfOptions = 4;
+  int  amountOfOptions = 6;
 
   string path = "/switch/WookReader";
 
@@ -848,6 +874,7 @@ void Menu_StartChoosing() {
   // Grid state
   int numFolders = 0;
   vector<SDL_Texture*> cover_textures;
+  vector<pair<int,int>> entry_progress;  // parallel to cover_textures: (last_page, total_pages)
   int scroll_y = 0;
   int cover_load_index = 0;  // next cover index to submit to background loader
 
@@ -896,6 +923,29 @@ void Menu_StartChoosing() {
     cell_h  = thumb_h;
   };
 
+  // Load saved progress (last page + total pages) for all book entries.
+  auto load_entry_progress = [&]() {
+    if (!config) {
+      config = (config_t*)malloc(sizeof(config_t));
+      config_init(config);
+      config_read_file(config, configFile);
+    }
+    int numBooks = (int)sorted_entries.size() - numFolders;
+    entry_progress.assign(numBooks, {0, 0});
+    for (int i = 0; i < numBooks; i++) {
+      string key = chooser_sanitize(sorted_entries[numFolders + i].string());
+      int last = 0, total = 0;
+      config_setting_t* s =
+          config_setting_get_member(config_root_setting(config), key.c_str());
+      if (s) last = config_setting_get_int(s);
+      string tkey = key + "_T";
+      config_setting_t* st =
+          config_setting_get_member(config_root_setting(config), tkey.c_str());
+      if (st) total = config_setting_get_int(st);
+      entry_progress[i] = {last, total};
+    }
+  };
+
   // Pick the largest label font that suits the current cell width.
   auto pick_label_font = [&]() -> TTF_Font* {
     if (cell_w >= 300) return ROBOTO_25;
@@ -934,6 +984,7 @@ void Menu_StartChoosing() {
     int numBooks = amountOfFiles - numFolders;
     cover_textures.resize(numBooks, nullptr);
     cover_load_index = 0;
+    load_entry_progress();
   };
 
   // Populate grid from g_recent (no filesystem scan).
@@ -955,6 +1006,7 @@ void Menu_StartChoosing() {
     amountOfFiles = (int)sorted_entries.size();
     cover_textures.resize(amountOfFiles, nullptr);
     cover_load_index = 0;
+    load_entry_progress();
   };
 
   load_recent();
@@ -1006,17 +1058,17 @@ void Menu_StartChoosing() {
     }
 
     if (kDown & HidNpadButton_B) {
-      if (drawNotesChooser) {
+      if (drawOption) {
+        save_config(chosenFolderColor, chosenBookColor, scroll_option,
+                    zoom_option, configDarkMode);
+        drawOption = false;
+      } else if (drawNotesChooser) {
         drawNotesChooser = false;
       } else if (inRecentFolder) {
         inRecentFolder = false;
         enter_directory(path);
       } else if (isWarningOnScreen) {
         isWarningOnScreen = false;
-      } else if (drawOption) {
-        save_config(chosenFolderColor, chosenBookColor, scroll_option,
-                    zoom_option, configDarkMode);
-        drawOption = false;
       } else if (path == "/switch/WookReader") {
         save_config(chosenFolderColor, chosenBookColor, scroll_option,
                     zoom_option, configDarkMode);
@@ -1029,6 +1081,36 @@ void Menu_StartChoosing() {
         if (parent.empty()) parent = "/";
         path = parent;
         enter_directory(path);
+      }
+    }
+
+    if (kDown & HidNpadButton_A && drawOption) {
+      switch (option_index) {
+        case 0:
+          chosenFolderColor = (chosenFolderColor < COLORS_SIZE)
+                                  ? chosenFolderColor + 1 : 0;
+          folder_image = folder_textures[chosenFolderColor];
+          break;
+        case 1:
+          chosenBookColor = (chosenBookColor < COLORS_SIZE)
+                                ? chosenBookColor + 1 : 0;
+          book_image = book_textures[chosenBookColor];
+          break;
+        case 2:
+          scroll_option = (scroll_option < 4) ? scroll_option + 1 : 1;
+          scroll_speed  = SCROLL * scroll_option;
+          break;
+        case 3:
+          zoom_option  = (zoom_option < 4) ? zoom_option + 1 : 1;
+          zoom_amount  = ZOOM * zoom_option;
+          break;
+        case 4:
+          configScreenButtons = !configScreenButtons;
+          break;
+        case 5:
+          configStatusBar = !configStatusBar;
+          break;
+        default: break;
       }
     }
 
@@ -1139,6 +1221,12 @@ void Menu_StartChoosing() {
             zoom_option  = (zoom_option < 4) ? zoom_option + 1 : 1;
             zoom_amount  = ZOOM * zoom_option;
             break;
+          case 4:
+            configScreenButtons = !configScreenButtons;
+            break;
+          case 5:
+            configStatusBar = !configStatusBar;
+            break;
           default: break;
         }
       } else if (!isWarningOnScreen && chosen_index >= numFolders) {
@@ -1172,6 +1260,12 @@ void Menu_StartChoosing() {
           case 3:
             zoom_option = (zoom_option > 1) ? zoom_option - 1 : 4;
             zoom_amount = ZOOM * zoom_option;
+            break;
+          case 4:
+            configScreenButtons = !configScreenButtons;
+            break;
+          case 5:
+            configStatusBar = !configStatusBar;
             break;
           default: break;
         }
@@ -1618,6 +1712,16 @@ void Menu_StartChoosing() {
                    textColor, "Zoom Amount: ");
       SDL_DrawTextf(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 3,
                     textColor, "%d", zoom_option);
+
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 4,
+                   textColor, "Screen Buttons: ");
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 4,
+                   textColor, configScreenButtons ? "On" : "Off");
+
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 5,
+                   textColor, "Status Bar: ");
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 5,
+                   textColor, configStatusBar ? "On" : "Off");
     }
 
     // ── Notes overlay ─────────────────────────────────────────────────────────
