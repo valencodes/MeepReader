@@ -25,9 +25,9 @@ extern "C" {
 
 int windowX, windowY;
 config_t* config = NULL;
-const char* configFile = "/switch/MeepReader/saved_pages.cfg";
+const char* configFile = "/switch/WookReader/saved_pages.cfg";
 
-static const char* NOTES_DIR = "/switch/MeepReader/.notes";
+static const char* NOTES_DIR = "/switch/WookReader/.notes";
 
 static std::string notes_path(const char* book_name) {
   return std::string(NOTES_DIR) + "/" + book_name + ".txt";
@@ -122,6 +122,106 @@ static void save_total_pages(const char* book_name, int total) {
   }
 }
 
+static float load_saved_zoom(const char* book_name) {
+  std::string key = std::string(book_name) + "_Z";
+  config_setting_t* setting =
+      config_setting_get_member(config_root_setting(config), key.c_str());
+  if (setting) {
+    return (float)config_setting_get_float(setting);
+  }
+  return 1.0f;
+}
+
+static void get_saved_position(const char* book_name, float& x, float& y) {
+  std::string key_x = std::string(book_name) + "_X";
+  std::string key_y = std::string(book_name) + "_Y";
+  config_setting_t* setting_x =
+      config_setting_get_member(config_root_setting(config), key_x.c_str());
+  config_setting_t* setting_y =
+      config_setting_get_member(config_root_setting(config), key_y.c_str());
+  if (setting_x && setting_y) {
+    x = (float)config_setting_get_float(setting_x);
+    y = (float)config_setting_get_float(setting_y);
+  } else {
+    x = 0.0f;
+    y = 0.0f;
+  }
+}
+
+static BookPageLayout load_saved_orientation(const char* book_name) {
+  std::string key = std::string(book_name) + "_O";
+  config_setting_t* setting =
+      config_setting_get_member(config_root_setting(config), key.c_str());
+  if (setting) {
+    int val = config_setting_get_int(setting);
+    if (val >= 0 && val <= 2) {
+      return (BookPageLayout)val;
+    }
+  }
+  return BookPageLayoutPortrait;
+}
+
+static void get_saved_rotation_and_spread(const char* book_name, int& rot, bool& spread) {
+  std::string key_r = std::string(book_name) + "_ROT";
+  std::string key_s = std::string(book_name) + "_SPR";
+  config_setting_t* setting_r =
+      config_setting_get_member(config_root_setting(config), key_r.c_str());
+  config_setting_t* setting_s =
+      config_setting_get_member(config_root_setting(config), key_s.c_str());
+  if (setting_r) {
+    rot = config_setting_get_int(setting_r);
+  } else {
+    rot = 0;
+  }
+  if (setting_s) {
+    spread = (config_setting_get_int(setting_s) != 0);
+  } else {
+    spread = false;
+  }
+}
+
+static void save_view_state(const char* book_name, float zoom, float x, float y, BookPageLayout orient, int rot, bool spread) {
+  std::string key_z = std::string(book_name) + "_Z";
+  std::string key_x = std::string(book_name) + "_X";
+  std::string key_y = std::string(book_name) + "_Y";
+  std::string key_o = std::string(book_name) + "_O";
+  std::string key_r = std::string(book_name) + "_ROT";
+  std::string key_s = std::string(book_name) + "_SPR";
+
+  // ZOOM
+  config_setting_t* s_z = config_setting_get_member(config_root_setting(config), key_z.c_str());
+  if (!s_z) s_z = config_setting_add(config_root_setting(config), key_z.c_str(), CONFIG_TYPE_FLOAT);
+  if (s_z) config_setting_set_float(s_z, zoom);
+
+  // X
+  config_setting_t* s_x = config_setting_get_member(config_root_setting(config), key_x.c_str());
+  if (!s_x) s_x = config_setting_add(config_root_setting(config), key_x.c_str(), CONFIG_TYPE_FLOAT);
+  if (s_x) config_setting_set_float(s_x, x);
+
+  // Y
+  config_setting_t* s_y = config_setting_get_member(config_root_setting(config), key_y.c_str());
+  if (!s_y) s_y = config_setting_add(config_root_setting(config), key_y.c_str(), CONFIG_TYPE_FLOAT);
+  if (s_y) config_setting_set_float(s_y, y);
+
+  // ORIENTATION
+  config_setting_t* s_o = config_setting_get_member(config_root_setting(config), key_o.c_str());
+  if (!s_o) s_o = config_setting_add(config_root_setting(config), key_o.c_str(), CONFIG_TYPE_INT);
+  if (s_o) config_setting_set_int(s_o, (int)orient);
+
+  // ROTATION
+  config_setting_t* s_r = config_setting_get_member(config_root_setting(config), key_r.c_str());
+  if (!s_r) s_r = config_setting_add(config_root_setting(config), key_r.c_str(), CONFIG_TYPE_INT);
+  if (s_r) config_setting_set_int(s_r, rot);
+
+  // SPREAD
+  config_setting_t* s_s = config_setting_get_member(config_root_setting(config), key_s.c_str());
+  if (!s_s) s_s = config_setting_add(config_root_setting(config), key_s.c_str(), CONFIG_TYPE_INT);
+  if (s_s) config_setting_set_int(s_s, spread ? 1 : 0);
+
+  config_write_file(config, configFile);
+  fsdevCommitDevice("sdmc");
+}
+
 // Returns true if the path is a comic archive (CBZ/CBR/CBT/CB7,
 // case-insensitive)
 static bool path_is_cbz(const char* path) {
@@ -161,11 +261,27 @@ BookReader::BookReader(const char* path, int* result) {
   if (_is_cbz) {
     Log_Write(std::string("BookReader: opening as comic ZIP: ") + path);
     int current_page = load_last_page(book_name.c_str());
+    _currentPageLayout = load_saved_orientation(book_name.c_str());
     switch_current_page_layout(_currentPageLayout, current_page);
     if (!layout) {
       Log_Error(std::string("BookReader: CBZ/CBR layout creation failed: ") + path);
       *result = -1;
       return;
+    }
+    // Set saved rotation, spread, zoom and position if they exist
+    int rot = 0;
+    bool spread = false;
+    get_saved_rotation_and_spread(book_name.c_str(), rot, spread);
+    layout->set_rotation_and_spread(rot, spread);
+
+    std::string key_z = std::string(book_name) + "_Z";
+    config_setting_t* setting_z =
+        config_setting_get_member(config_root_setting(config), key_z.c_str());
+    if (setting_z) {
+      float z = (float)config_setting_get_float(setting_z);
+      float x = 0.0f, y = 0.0f;
+      get_saved_position(book_name.c_str(), x, y);
+      layout->set_zoom_and_position(z, x, y);
     }
     // Layout was created — enumeration may still be running in background.
     // Validity is checked in draw() after enumeration completes.
@@ -201,7 +317,7 @@ BookReader::BookReader(const char* path, int* result) {
     }
 
     int current_page = load_last_page(book_name.c_str());
-
+    _currentPageLayout = load_saved_orientation(book_name.c_str());
     switch_current_page_layout(_currentPageLayout, current_page);
 
     if (!layout) {
@@ -209,6 +325,18 @@ BookReader::BookReader(const char* path, int* result) {
                 path);
       *result = -3;
       return;
+    }
+
+    // Set saved zoom and position if they exist
+    std::string key_z = std::string(book_name) + "_Z";
+    config_setting_t* setting_z =
+        config_setting_get_member(config_root_setting(config), key_z.c_str());
+    if (setting_z) {
+      float z = (float)config_setting_get_float(setting_z);
+      float x = 0.0f, y = 0.0f;
+      get_saved_position(book_name.c_str(), x, y);
+      layout->set_zoom_and_position(z, x, y);
+      layout->render_page_to_texture(current_page, false);
     }
 
     Log_Write("BookReader: MuPDF opened OK, starting page=" +
@@ -595,8 +723,13 @@ void BookReader::reset_nav_buttons() { _btn_hide_at = SDL_GetTicks() + 3000; }
 void BookReader::save_progress() {
   if (!layout) return;
   save_last_page(book_name.c_str(), layout->current_page());
-  // Total pages is invariant while a book is open; written once at open time.
-  // Removed from here to eliminate the double SD write per page navigation.
+  
+  float z = layout->get_zoom();
+  float x = 0.0f, y = 0.0f;
+  layout->get_position(x, y);
+  int rot = layout->get_rotation();
+  bool spread = layout->get_spread_mode();
+  save_view_state(book_name.c_str(), z, x, y, _currentPageLayout, rot, spread);
 }
 
 void BookReader::switch_current_page_layout(BookPageLayout bookPageLayout,

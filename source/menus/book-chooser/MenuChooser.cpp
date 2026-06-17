@@ -32,7 +32,7 @@ extern config_t*   config;
 extern const char* configFile;
 
 // ── Per-comic notes helpers ───────────────────────────────────────────────────
-static const char* CHOOSER_NOTES_DIR = "/switch/MeepReader/.notes";
+static const char* CHOOSER_NOTES_DIR = "/switch/WookReader/.notes";
 
 static string chooser_sanitize(const string& fpath) {
   string name = fpath.substr(fpath.find_last_of("/\\") + 1);
@@ -83,8 +83,8 @@ static void chooser_note_save(const string& fpath, const string& text) {
 }
 
 // ── Reading history ───────────────────────────────────────────────────────────
-static const char RECENT_FILE[]     = "/switch/MeepReader/.recent.lst";
-static const char RECENT_SENTINEL[] = "/MEEP_RECENT";
+static const char RECENT_FILE[]     = "/switch/WookReader/.recent.lst";
+static const char RECENT_SENTINEL[] = "/WOOK_RECENT";
 static vector<string> g_recent;
 
 static void load_recent() {
@@ -127,7 +127,7 @@ static void update_recent(const string& fpath) {
 
 /*configFile For Options*/
 config_t* optionConfig = NULL;
-const char* optionFile = "/switch/MeepReader/options.cfg";
+const char* optionFile = "/switch/WookReader/options.cfg";
 
 // ── Grid layout ──────────────────────────────────────────────────────────────
 // COLS/CELL_W/CELL_H/THUMB_W/THUMB_H are dynamic (ZL/ZR zoom) — local vars in Menu_StartChoosing
@@ -395,7 +395,7 @@ static vector<fs::path> get_sorted_entries(const string& path,
 
 // ── Cover thumbnail loading ───────────────────────────────────────────────────
 
-static const char PAGECACHE_DIR[] = "/switch/MeepReader/.pagecache";
+static const char PAGECACHE_DIR[] = "/switch/WookReader/.pagecache";
 
 // FNV-1a key shared with CBZPageLayout — must stay in sync.
 static uint64_t comic_cache_key(const char* path) {
@@ -912,7 +912,7 @@ void Menu_StartChoosing() {
   int  option_index   = 0;
   int  amountOfOptions = 9;
 
-  string path = "/switch/MeepReader";
+  string path = "/switch/WookReader";
 
   int windowX, windowY;
   SDL_GetWindowSize(WINDOW, &windowX, &windowY);
@@ -1036,7 +1036,7 @@ void Menu_StartChoosing() {
     sorted_entries = get_sorted_entries(dir, allowedExtentions, &numFolders);
 
     // Inject virtual "Recently Opened" folder at root when history exists
-    if (dir == "/switch/MeepReader" && !g_recent.empty()) {
+    if (dir == "/switch/WookReader" && !g_recent.empty()) {
       sorted_entries.insert(sorted_entries.begin(), fs::path(RECENT_SENTINEL));
       numFolders++;
     }
@@ -1131,7 +1131,7 @@ void Menu_StartChoosing() {
         enter_directory(path);
       } else if (isWarningOnScreen) {
         isWarningOnScreen = false;
-      } else if (path == "/switch/MeepReader") {
+      } else if (path == "/switch/WookReader") {
         save_config(chosenFolderColor, chosenBookColor, scroll_option,
                     zoom_option, configDarkMode);
         break;

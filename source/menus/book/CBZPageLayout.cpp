@@ -591,9 +591,19 @@ void CBZPageLayout::apply_first_image()
     _min_zoom   = std::min((float)_viewport.w / ew, (float)_viewport.h / eh);
     _max_zoom   = std::max((float)_viewport.w / ew, (float)_viewport.h / eh) * 2.0f;
     _max_zoom   = std::max(_max_zoom, _min_zoom * 4.0f);
-    _zoom       = _min_zoom;
-    _cx         = _viewport.w / 2.0f;
-    _cy         = eh * _zoom / 2.0f;
+    if (_has_saved_view)
+    {
+        _zoom = std::fmin(std::fmax(_saved_zoom, _min_zoom), _max_zoom);
+        _cx   = _saved_cx;
+        _cy   = _saved_cy;
+        _has_saved_view = false;
+    }
+    else
+    {
+        _zoom       = _min_zoom;
+        _cx         = _viewport.w / 2.0f;
+        _cy         = eh * _zoom / 2.0f;
+    }
     _current_page = 0;
     _page_count   = 1;   // placeholder until finish_enumeration() knows the real count
     _valid        = true;
@@ -720,7 +730,7 @@ void CBZPageLayout::finish_enumeration()
             FreeTextureIfNeeded(&_tex);
             FreeTextureIfNeeded(&_tex_r);
             int clamped = std::max(0, std::min(_start_page, _page_count - 1));
-            load_page_texture(clamped, true);
+            render_page_to_texture(clamped, true);
             _valid = true;
         }
     }
@@ -760,7 +770,7 @@ CBZPageLayout::CBZPageLayout(const char *path, int start_page)
     Log_Write("CBZPageLayout: opened OK (sync), pages=" + std::to_string(_page_count) + " path=" + path);
 
     int clamped = std::max(0, std::min(start_page, _page_count - 1));
-    load_page_texture(clamped, true);
+    render_page_to_texture(clamped, true);
     _valid = true;
 }
 
@@ -814,7 +824,7 @@ static SDL_Texture *load_one_page_texture(const char *archive_path,
     return tex;
 }
 
-void CBZPageLayout::load_page_texture(int page_num, bool reset_zoom)
+void CBZPageLayout::render_page_to_texture(int page_num, bool reset_zoom)
 {
     float zoom_factor = 1.0f;
     if (_min_zoom > 0.0f)
@@ -952,7 +962,14 @@ void CBZPageLayout::load_page_texture(int page_num, bool reset_zoom)
     _max_zoom = std::max(_max_zoom, _min_zoom * 4.0f);
 
     bool should_reset_zoom = reset_zoom || !configKeepZoom;
-    if (should_reset_zoom)
+    if (_has_saved_view)
+    {
+        _zoom = std::fmin(std::fmax(_saved_zoom, _min_zoom), _max_zoom);
+        _cx   = _saved_cx;
+        _cy   = _saved_cy;
+        _has_saved_view = false;
+    }
+    else if (should_reset_zoom)
     {
         _zoom = _min_zoom;
         _cx   = _viewport.w / 2.0f;
@@ -1361,7 +1378,7 @@ void CBZPageLayout::previous_page(int n)
     {
         // Fallback: blocking load
         free_ready_textures();
-        load_page_texture(new_page, false);
+        render_page_to_texture(new_page, false);
     }
 
     if (_enumerating)
@@ -1474,7 +1491,7 @@ void CBZPageLayout::next_page(int n)
     {
         // Fallback: blocking load (spread mode, multi-step skip, or no ready texture)
         free_ready_textures();
-        load_page_texture(new_page, false);
+        render_page_to_texture(new_page, false);
     }
 
     if (_enumerating)
@@ -1490,7 +1507,7 @@ void CBZPageLayout::goto_page(int num)
     if (target == _current_page)
         return;
     free_ready_textures();
-    load_page_texture(target, false);
+    render_page_to_texture(target, false);
     if (_enumerating)
         _enum_current_name = _page_names[_current_page];
 }
@@ -1512,7 +1529,7 @@ void CBZPageLayout::toggle_spread()
         _spread_mode = false;
     }
     free_ready_textures();
-    load_page_texture(_current_page, true);
+    render_page_to_texture(_current_page, true);
 }
 
 void CBZPageLayout::zoom_in(float zoom_amount)  { apply_zoom(_zoom + zoom_amount); }

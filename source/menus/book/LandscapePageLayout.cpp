@@ -68,7 +68,15 @@ void LandscapePageLayout::get_scroll_fractions(float &frac_x, float &frac_y) con
 
 void LandscapePageLayout::apply_position(float old_zoom_factor, bool should_reset_zoom, bool keep_position, float frac_x, float frac_y)
 {
-    if (should_reset_zoom)
+    if (_has_saved_view)
+    {
+        zoom = std::fmin(std::fmax(_saved_zoom, min_zoom), max_zoom);
+        page_center.x = _saved_cx;
+        page_center.y = _saved_cy;
+        move_page(0, 0); // Clamp to viewport limits
+        _has_saved_view = false;
+    }
+    else if (should_reset_zoom)
     {
         zoom = min_zoom;
         page_center.y = viewport.w / 2.0f;
