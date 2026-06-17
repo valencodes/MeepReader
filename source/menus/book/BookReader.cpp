@@ -25,9 +25,9 @@ extern "C" {
 
 int windowX, windowY;
 config_t* config = NULL;
-const char* configFile = "/switch/WookReader/saved_pages.cfg";
+const char* configFile = "/switch/MeepReader/saved_pages.cfg";
 
-static const char* NOTES_DIR = "/switch/WookReader/.notes";
+static const char* NOTES_DIR = "/switch/MeepReader/.notes";
 
 static std::string notes_path(const char* book_name) {
   return std::string(NOTES_DIR) + "/" + book_name + ".txt";
