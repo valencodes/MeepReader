@@ -67,12 +67,17 @@ public:
     virtual char *info();
     virtual bool pageFitsWidth() const  { return page_bounds.x1 * zoom <= viewport.w + 0.5f; }
     virtual bool pageFitsHeight() const { return page_bounds.y1 * zoom <= viewport.h + 0.5f; }
+    virtual float get_min_zoom_for_bounds(const fz_rect &bounds) const;
+    virtual float get_max_zoom_for_bounds(const fz_rect &bounds, float min_z) const;
+    virtual void update_min_max_zoom();
 
 protected:
     virtual void render_page_to_texture(int num, bool reset_zoom);
     virtual void set_zoom(float value);
     virtual void move_page(float x, float y);
     virtual void top_of_page();
+    virtual void get_scroll_fractions(float &frac_x, float &frac_y) const;
+    virtual void apply_position(float old_zoom_factor, bool should_reset_zoom, bool keep_position, float frac_x, float frac_y);
 
     fz_document *doc = NULL;
     pdf_document *pdf = NULL;
@@ -85,6 +90,9 @@ protected:
 
     SDL_Rect viewport;
     SDL_Texture *page_texture = NULL;
+    float rendered_zoom = -1.0f;
+    uint32_t last_zoom_time = 0;
+    bool zoom_dirty = false;
 
 private:
     std::string _bg_path;

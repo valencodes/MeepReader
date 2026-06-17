@@ -54,19 +54,30 @@ static void notes_save(const char* book_name, const std::string& text) {
   std::string path = notes_path(book_name);
   if (text.empty()) {
     remove(path.c_str());
+    fsdevCommitDevice("sdmc");
     return;
   }
   FILE* f = fopen(path.c_str(), "w");
   if (!f) return;
   fwrite(text.data(), 1, text.size(), f);
   fclose(f);
+  fsdevCommitDevice("sdmc");
 }
 
 static int load_last_page(const char* book_name) {
   if (!config) {
     config = (config_t*)malloc(sizeof(config_t));
     config_init(config);
-    config_read_file(config, configFile);
+    if (config_read_file(config, configFile) == CONFIG_FALSE) {
+      if (config_error_type(config) == CONFIG_ERR_PARSE) {
+        Log_Error("load_last_page: config parse error: " +
+                  std::string(config_error_text(config)) + " at line " +
+                  std::to_string(config_error_line(config)));
+        remove(configFile);
+        config_destroy(config);
+        config_init(config);
+      }
+    }
   }
 
   config_setting_t* setting =
@@ -90,7 +101,9 @@ static void save_last_page(const char* book_name, int current_page) {
 
   if (setting) {
     config_setting_set_int(setting, current_page);
-    config_write_file(config, configFile);
+    int rc = config_write_file(config, configFile);
+    fsdevCommitDevice("sdmc");
+    Log_Write("save_last_page: book=" + std::string(book_name) + " page=" + std::to_string(current_page) + " write_result=" + std::to_string(rc));
   }
 }
 
@@ -105,6 +118,7 @@ static void save_total_pages(const char* book_name, int total) {
   if (setting) {
     config_setting_set_int(setting, total);
     config_write_file(config, configFile);
+    fsdevCommitDevice("sdmc");
   }
 }
 
@@ -124,13 +138,21 @@ BookReader::BookReader(const char* path, int* result) {
   SDL_GetWindowSize(WINDOW, &windowX, &windowY);
 
   book_path = path;
-  book_name =
+  std::string filename =
       std::string(path).substr(std::string(path).find_last_of("/\\") + 1);
 
-  std::string invalid_chars = " :/?#[]@!$&'()*+,;=.";
-  for (char& c : invalid_chars)
-    book_name.erase(std::remove(book_name.begin(), book_name.end(), c),
-                    book_name.end());
+  std::string sanitized = "";
+  for (char c : filename) {
+    if (isalnum((unsigned char)c) || c == '-' || c == '_') {
+      sanitized += c;
+    }
+  }
+  if (!sanitized.empty() && !isalpha((unsigned char)sanitized[0])) {
+    sanitized = "b" + sanitized;
+  }
+  book_name = sanitized;
+
+  Log_Write("BookReader: book_name resolved to: " + book_name);
 
   _notes = notes_load(book_name.c_str());
 
@@ -197,13 +219,14 @@ BookReader::BookReader(const char* path, int* result) {
       save_total_pages(book_name.c_str(), _total_pages);
   }
   fz_catch(ctx) {
-    Log_Error(std::string("BookReader: fz_catch on open: ") + path);
+    Log_Error(std::string("BookReader: fz_catch on open: ") + path + " - error: " + fz_caught_message(ctx));
     *result = -2;
     return;
   }
 }
 
 BookReader::~BookReader() {
+  save_progress();
   if (_nav_tex_left)  { SDL_DestroyTexture(_nav_tex_left);  _nav_tex_left  = nullptr; }
   if (_nav_tex_right) { SDL_DestroyTexture(_nav_tex_right); _nav_tex_right = nullptr; }
   if (_nav_tex_up)    { SDL_DestroyTexture(_nav_tex_up);    _nav_tex_up    = nullptr; }
@@ -229,21 +252,27 @@ BookReader::~BookReader() {
 void BookReader::previous_page(int n) {
   if (!layout) return;
   layout->previous_page(n);
-  show_status_bar();
+  if (configStatusBarPageTurn) {
+    show_status_bar();
+  }
   save_progress();
 }
 
 void BookReader::next_page(int n) {
   if (!layout) return;
   layout->next_page(n);
-  show_status_bar();
+  if (configStatusBarPageTurn) {
+    show_status_bar();
+  }
   save_progress();
 }
 
 void BookReader::goto_page(int page_1indexed) {
   if (!layout) return;
   layout->goto_page(page_1indexed - 1);  // convert 1-indexed → 0-indexed
-  show_status_bar();
+  if (configStatusBarPageTurn) {
+    show_status_bar();
+  }
   save_progress();
 }
 
@@ -495,9 +524,9 @@ void BookReader::draw(bool drawHelp, bool drawNotes) {
 
         StatusBar_DisplayTime(false);
       } else if (_currentPageLayout == BookPageLayoutLandscape) {
-        SDL_DrawRect(RENDERER, 1280 - 45, 0, 45, 720, SDL_MakeColour(0, 0, 0, 180));
-        int x = (1280 - title_width) - ((40 - title_height) / 2);
-        int y = (720 - title_height) / 2;
+        SDL_DrawRect(RENDERER, 0, 0, 45, 720, SDL_MakeColour(0, 0, 0, 180));
+        int x = 45 - ((45 - title_height) / 2);
+        int y = (720 - title_width) / 2;
         SDL_DrawRotatedText(RENDERER, ROBOTO_25, (double)90, x, y, WHITE,
                             title);
 
