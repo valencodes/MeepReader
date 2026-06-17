@@ -33,9 +33,20 @@ extern const char* configFile;
 
 // ── Per-comic notes helpers ───────────────────────────────────────────────────
 static const char* CHOOSER_NOTES_DIR = "/switch/WookReader/.notes";
+static const char* CHOOSER_NOTES_DIR = "/switch/WookReader/.notes";
 
 static string chooser_sanitize(const string& fpath) {
   string name = fpath.substr(fpath.find_last_of("/\\") + 1);
+  string sanitized = "";
+  for (char c : name) {
+    if (isalnum((unsigned char)c) || c == '-' || c == '_') {
+      sanitized += c;
+    }
+  }
+  if (!sanitized.empty() && !isalpha((unsigned char)sanitized[0])) {
+    sanitized = "b" + sanitized;
+  }
+  return sanitized;
   string sanitized = "";
   for (char c : name) {
     if (isalnum((unsigned char)c) || c == '-' || c == '_') {
@@ -75,10 +86,12 @@ static void chooser_note_save(const string& fpath, const string& text) {
   FS_RecursiveMakeDir(CHOOSER_NOTES_DIR);
   string p = chooser_note_path(fpath);
   if (text.empty()) { remove(p.c_str()); fsdevCommitDevice("sdmc"); return; }
+  if (text.empty()) { remove(p.c_str()); fsdevCommitDevice("sdmc"); return; }
   FILE* f = fopen(p.c_str(), "w");
   if (!f) return;
   fwrite(text.data(), 1, text.size(), f);
   fclose(f);
+  fsdevCommitDevice("sdmc");
   fsdevCommitDevice("sdmc");
 }
 
@@ -127,6 +140,7 @@ static void update_recent(const string& fpath) {
 
 /*configFile For Options*/
 config_t* optionConfig = NULL;
+const char* optionFile = "/switch/WookReader/options.cfg";
 const char* optionFile = "/switch/WookReader/options.cfg";
 
 // ── Grid layout ──────────────────────────────────────────────────────────────
@@ -230,6 +244,18 @@ static int load_config(unsigned int* chosenFolderColor,
       config_setting_get_member(config_root_setting(optionConfig), "StatusBarPageTurn");
   if (sbpt) configStatusBarPageTurn = config_setting_get_bool(sbpt);
 
+  config_setting_t* kzoom =
+      config_setting_get_member(config_root_setting(optionConfig), "KeepZoom");
+  if (kzoom) configKeepZoom = config_setting_get_bool(kzoom);
+
+  config_setting_t* kpos =
+      config_setting_get_member(config_root_setting(optionConfig), "KeepPosition");
+  if (kpos) configKeepPosition = config_setting_get_bool(kpos);
+
+  config_setting_t* sbpt =
+      config_setting_get_member(config_root_setting(optionConfig), "StatusBarPageTurn");
+  if (sbpt) configStatusBarPageTurn = config_setting_get_bool(sbpt);
+
   return 0;
 }
 
@@ -307,7 +333,32 @@ static void save_config(unsigned int chosenFolderColor,
   if (sbpt)
     config_setting_set_bool(sbpt, configStatusBarPageTurn);
 
+  config_setting_t* kzoom =
+      config_setting_get_member(config_root_setting(optionConfig), "KeepZoom");
+  if (!kzoom)
+    kzoom = config_setting_add(config_root_setting(optionConfig), "KeepZoom",
+                               CONFIG_TYPE_BOOL);
+  if (kzoom)
+    config_setting_set_bool(kzoom, configKeepZoom);
+
+  config_setting_t* kpos =
+      config_setting_get_member(config_root_setting(optionConfig), "KeepPosition");
+  if (!kpos)
+    kpos = config_setting_add(config_root_setting(optionConfig), "KeepPosition",
+                              CONFIG_TYPE_BOOL);
+  if (kpos)
+    config_setting_set_bool(kpos, configKeepPosition);
+
+  config_setting_t* sbpt =
+      config_setting_get_member(config_root_setting(optionConfig), "StatusBarPageTurn");
+  if (!sbpt)
+    sbpt = config_setting_add(config_root_setting(optionConfig), "StatusBarPageTurn",
+                               CONFIG_TYPE_BOOL);
+  if (sbpt)
+    config_setting_set_bool(sbpt, configStatusBarPageTurn);
+
   config_write_file(optionConfig, optionFile);
+  fsdevCommitDevice("sdmc");
   fsdevCommitDevice("sdmc");
 }
 
@@ -395,6 +446,7 @@ static vector<fs::path> get_sorted_entries(const string& path,
 
 // ── Cover thumbnail loading ───────────────────────────────────────────────────
 
+static const char PAGECACHE_DIR[] = "/switch/WookReader/.pagecache";
 static const char PAGECACHE_DIR[] = "/switch/WookReader/.pagecache";
 
 // FNV-1a key shared with CBZPageLayout — must stay in sync.
@@ -778,8 +830,24 @@ static unsigned char* extract_pdf_cover_pixels(const char* path, int tw, int th,
     if (pw <= 0.0f || ph <= 0.0f)
       fz_throw(bg_ctx, FZ_ERROR_GENERIC, "invalid page bounds");
     float scale = fminf((float)tw / pw, (float)th / ph);
+    float pw = bounds.x1 - bounds.x0;
+    float ph = bounds.y1 - bounds.y0;
+    if (pw <= 0.0f || ph <= 0.0f)
+      fz_throw(bg_ctx, FZ_ERROR_GENERIC, "invalid page bounds");
+    float scale = fminf((float)tw / pw, (float)th / ph);
     pix = fz_new_pixmap_from_page_contents(
         bg_ctx, page, fz_scale(scale, scale), fz_device_rgb(bg_ctx), 1);
+    int stride = pix->stride;
+    int w = pix->w;
+    int h = pix->h;
+    int row_bytes = w * 4;
+    result = (unsigned char*)malloc((size_t)w * h * 4);
+    if (result) {
+      for (int y = 0; y < h; y++) {
+        memcpy(result + (size_t)y * row_bytes, pix->samples + (size_t)y * stride, row_bytes);
+      }
+    }
+    *out_iw = w; *out_ih = h;
     int stride = pix->stride;
     int w = pix->w;
     int h = pix->h;
@@ -911,7 +979,9 @@ void Menu_StartChoosing() {
   bool drawOption  = false;
   int  option_index   = 0;
   int  amountOfOptions = 9;
+  int  amountOfOptions = 9;
 
+  string path = "/switch/WookReader";
   string path = "/switch/WookReader";
 
   int windowX, windowY;
@@ -989,6 +1059,15 @@ void Menu_StartChoosing() {
     config_init(config);
     int read_rc = config_read_file(config, configFile);
     Log_Write("load_entry_progress: read saved_pages.cfg, result=" + to_string(read_rc));
+    if (config) {
+      config_destroy(config);
+      free(config);
+      config = nullptr;
+    }
+    config = (config_t*)malloc(sizeof(config_t));
+    config_init(config);
+    int read_rc = config_read_file(config, configFile);
+    Log_Write("load_entry_progress: read saved_pages.cfg, result=" + to_string(read_rc));
     int numBooks = (int)sorted_entries.size() - numFolders;
     entry_progress.assign(numBooks, {0, 0});
     for (int i = 0; i < numBooks; i++) {
@@ -996,6 +1075,10 @@ void Menu_StartChoosing() {
       int last = 0, total = 0;
       config_setting_t* s =
           config_setting_get_member(config_root_setting(config), key.c_str());
+      if (s) {
+        last = config_setting_get_int(s);
+        Log_Write("load_entry_progress: key=" + key + " loaded last_page=" + to_string(last));
+      }
       if (s) {
         last = config_setting_get_int(s);
         Log_Write("load_entry_progress: key=" + key + " loaded last_page=" + to_string(last));
@@ -1036,6 +1119,7 @@ void Menu_StartChoosing() {
     sorted_entries = get_sorted_entries(dir, allowedExtentions, &numFolders);
 
     // Inject virtual "Recently Opened" folder at root when history exists
+    if (dir == "/switch/WookReader" && !g_recent.empty()) {
     if (dir == "/switch/WookReader" && !g_recent.empty()) {
       sorted_entries.insert(sorted_entries.begin(), fs::path(RECENT_SENTINEL));
       numFolders++;
@@ -1132,6 +1216,7 @@ void Menu_StartChoosing() {
       } else if (isWarningOnScreen) {
         isWarningOnScreen = false;
       } else if (path == "/switch/WookReader") {
+      } else if (path == "/switch/WookReader") {
         save_config(chosenFolderColor, chosenBookColor, scroll_option,
                     zoom_option, configDarkMode);
         break;
@@ -1181,6 +1266,15 @@ void Menu_StartChoosing() {
         case 8:
           configStatusBarPageTurn = !configStatusBarPageTurn;
           break;
+        case 6:
+          configKeepZoom = !configKeepZoom;
+          break;
+        case 7:
+          configKeepPosition = !configKeepPosition;
+          break;
+        case 8:
+          configStatusBarPageTurn = !configStatusBarPageTurn;
+          break;
         default: break;
       }
     }
@@ -1209,6 +1303,7 @@ void Menu_StartChoosing() {
             Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
             if (inRecentFolder) enter_recent();
             else load_entry_progress();
+            else load_entry_progress();
           } else {
             isWarningOnScreen = true;
           }
@@ -1220,6 +1315,7 @@ void Menu_StartChoosing() {
           update_recent(book);
           Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
           if (inRecentFolder) enter_recent();
+          else load_entry_progress();
           else load_entry_progress();
         }
       }
@@ -1309,6 +1405,15 @@ void Menu_StartChoosing() {
           case 8:
             configStatusBarPageTurn = !configStatusBarPageTurn;
             break;
+          case 6:
+            configKeepZoom = !configKeepZoom;
+            break;
+          case 7:
+            configKeepPosition = !configKeepPosition;
+            break;
+          case 8:
+            configStatusBarPageTurn = !configStatusBarPageTurn;
+            break;
           default: break;
         }
       } else if (!isWarningOnScreen && chosen_index >= numFolders) {
@@ -1348,6 +1453,15 @@ void Menu_StartChoosing() {
             break;
           case 5:
             configStatusBar = !configStatusBar;
+            break;
+          case 6:
+            configKeepZoom = !configKeepZoom;
+            break;
+          case 7:
+            configKeepPosition = !configKeepPosition;
+            break;
+          case 8:
+            configStatusBarPageTurn = !configStatusBarPageTurn;
             break;
           case 6:
             configKeepZoom = !configKeepZoom;
@@ -1520,6 +1634,7 @@ void Menu_StartChoosing() {
                 Menu_OpenBook((char*)book.c_str(), scroll_speed, zoom_amount);
                 if (inRecentFolder) enter_recent();
                 else load_entry_progress();
+                else load_entry_progress();
               }
             }
           }
@@ -1608,6 +1723,26 @@ void Menu_StartChoosing() {
       string display_path = path.size() > 18 ? path.substr(18) : "";
       SDL_DrawText(RENDERER, ROBOTO_25, 10, windowY - 40, textColor,
                    display_path.c_str());
+
+      if (chosen_index >= numFolders) {
+        int bi = chosen_index - numFolders;
+        if (bi >= 0 && bi < (int)entry_progress.size()) {
+          int last_pg = entry_progress[bi].first;
+          int total_pg = entry_progress[bi].second;
+          if (total_pg > 0) {
+            int percent = (total_pg > 1) ? (int)((float)last_pg / (total_pg - 1) * 100.0f) : 100;
+            if (percent > 100) percent = 100;
+            if (percent < 0) percent = 0;
+            int display_page = last_pg + 1;
+            if (display_page > total_pg) display_page = total_pg;
+            char prog_buf[128];
+            snprintf(prog_buf, sizeof(prog_buf), "Progress: %d%% (Page %d/%d)", percent, display_page, total_pg);
+            SDL_DrawText(RENDERER, ROBOTO_20, 10, windowY - 18, textColor, prog_buf);
+          } else {
+            SDL_DrawText(RENDERER, ROBOTO_20, 10, windowY - 18, textColor, "Progress: Not started");
+          }
+        }
+      }
 
       if (chosen_index >= numFolders) {
         int bi = chosen_index - numFolders;
@@ -1764,6 +1899,27 @@ void Menu_StartChoosing() {
           SDL_SetRenderDrawBlendMode(RENDERER, SDL_BLENDMODE_NONE);
         }
       }
+
+      // Reading progress bar (drawn at the bottom of the thumbnail/cell)
+      if (bi >= 0 && bi < (int)entry_progress.size()) {
+        int last_pg = entry_progress[bi].first;
+        int total_pg = entry_progress[bi].second;
+        if (total_pg > 0) {
+          float pct = (float)last_pg / total_pg;
+          if (pct > 1.0f) pct = 1.0f;
+          if (pct < 0.0f) pct = 0.0f;
+          int pbar_h = 6;
+          int pbar_y = dy + dh - pbar_h;
+          SDL_SetRenderDrawBlendMode(RENDERER, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(RENDERER, 80, 80, 80, 200);
+          SDL_Rect pbar_bg = { dx, pbar_y, dw, pbar_h };
+          SDL_RenderFillRect(RENDERER, &pbar_bg);
+          SDL_SetRenderDrawColor(RENDERER, 0, 180, 160, 255); // Nice teal
+          SDL_Rect pbar_fill = { dx, pbar_y, (int)(dw * pct), pbar_h };
+          SDL_RenderFillRect(RENDERER, &pbar_fill);
+          SDL_SetRenderDrawBlendMode(RENDERER, SDL_BLENDMODE_NONE);
+        }
+      }
     }
 
     // ── Empty folder label ────────────────────────────────────────────────────
@@ -1806,6 +1962,7 @@ void Menu_StartChoosing() {
 
     if (drawOption) {
       int helpWidth  = 680;
+      int helpHeight = 515;
       int helpHeight = 515;
 
       if (!configDarkMode)
@@ -1855,6 +2012,21 @@ void Menu_StartChoosing() {
                    textColor, "Status Bar: ");
       SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 5,
                    textColor, configStatusBar ? "On" : "Off");
+
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 6,
+                   textColor, "Keep Zoom: ");
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 6,
+                   textColor, configKeepZoom ? "On" : "Off");
+
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 7,
+                   textColor, "Keep Position: ");
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 7,
+                   textColor, configKeepPosition ? "On" : "Off");
+
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 8,
+                   textColor, "Page Turn Status: ");
+      SDL_DrawText(RENDERER, ROBOTO_25, optTextX + 400, optTextY + 38 * 8,
+                   textColor, configStatusBarPageTurn ? "On" : "Off");
 
       SDL_DrawText(RENDERER, ROBOTO_25, optTextX, optTextY + 38 * 6,
                    textColor, "Keep Zoom: ");
@@ -1936,6 +2108,12 @@ void Menu_StartChoosing() {
     config_destroy(optionConfig);
     free(optionConfig);
     optionConfig = nullptr;
+  }
+
+  if (config) {
+    config_destroy(config);
+    free(config);
+    config = nullptr;
   }
 
   if (config) {
